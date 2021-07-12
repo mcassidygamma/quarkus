@@ -9,6 +9,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
@@ -64,7 +65,8 @@ final class LauncherUtil {
                 Duration.ofSeconds(waitTimeSeconds), signal, resultReference);
         new Thread(captureListeningDataReader, "capture-listening-data").start();
         try {
-            signal.await(10, TimeUnit.SECONDS);
+            signal.await(Optional.ofNullable(System.getProperty("quarkus.test.timeout")).map(Integer::parseInt).orElse(10),
+                    TimeUnit.SECONDS);
             ListeningAddress result = resultReference.get();
             if (result != null) {
                 return result;
@@ -110,11 +112,21 @@ final class LauncherUtil {
 
         @Override
         public void run() {
-            if (!ensureProcessOutputFileExists()) {
-                return;
-            }
-
             long bailoutTime = System.currentTimeMillis() + waitTime.toMillis();
+
+            while (!ensureProcessOutputFileExists()) {
+                try {
+                    Thread.sleep(500);
+                    if (System.currentTimeMillis() > bailoutTime) {
+                        unableToDetermineData("Waited " + waitTime.getSeconds() + "seconds for the log file to be present");
+                        return;
+                    }
+                } catch (InterruptedException e) {
+                    unableToDetermineData("The quarkus log file was not found");
+                }
+            }
+            bailoutTime = System.currentTimeMillis() + waitTime.toMillis();
+
             try (BufferedReader reader = new BufferedReader(new FileReader(processOutput.toFile()))) {
                 while (true) {
                     if (reader.ready()) { // avoid blocking as the input is a file which continually gets more data added
